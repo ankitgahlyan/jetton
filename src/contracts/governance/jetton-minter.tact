@@ -131,7 +131,7 @@ contract GovernanceJettonMinter(
             });
         } else if (op == JettonBurn.opcode()) {
             // It is needed to validate the message
-            JettonBurn.fromSlice(masterMsgSlice);
+            let _ = JettonBurn.fromSlice(masterMsgSlice);
 
             let ctx = context();
             require(
@@ -148,7 +148,7 @@ contract GovernanceJettonMinter(
             });
         } else if (op == SetStatus.opcode()) { // SetStatus opcode
             // It is needed to validate the message
-            SetStatus.fromSlice(masterMsgSlice);
+            let _ = SetStatus.fromSlice(masterMsgSlice);
 
             deploy(DeployParameters {
                 bounce: false,
