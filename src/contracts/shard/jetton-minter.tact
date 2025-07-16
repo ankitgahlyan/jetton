@@ -4,10 +4,12 @@
 import "./jetton-wallet";
 import "./messages";
 import "./constants";
-import "../utils.tact";
+//import "../utils.tact";
 import "../utils";
 import "./shard-utils";
 import "./send";
+import "@stdlib/ownable";
+import "./extras";
 
 struct JettonMinterState {
     totalSupply: Int as coins;
@@ -21,8 +23,14 @@ contract JettonMinterSharded(
     totalSupply: Int as coins,
     owner: Address,
     jettonContent: Cell,
-    mintable: Bool, // Should be deployed with this flag set to true
+    mintable: Bool, // Should be deployed with this flag set to false TODO:useTOPauseContractActs
+    //mbrpAmount: Int as coins,//TODO: change from coins, add fun to change, send message to all contracts on change
 ) {
+
+    // receive("updateMBRP") {
+    //     //TODO: v2
+    // }
+
     receive(msg: ProvideWalletAddress) {
         let ownerWorkchain: Int = parseStdAddress(msg.ownerAddress.asSlice()).workchain;
 
@@ -44,6 +52,11 @@ contract JettonMinterSharded(
     }
 
     receive(msg: JettonBurnNotification) {
+        // let expectedAddress: Address = contractAddress(initOf TodoChild(myAddress(), msg.fromSeqno));
+        
+        // require(sender() == expectedAddress, "Access denied");
+        // only the real children can get here
+
         let sender = parseStdAddress(sender().asSlice());
         let wallet = getJettonBasechainWalletByOwner(msg.sender);
 
@@ -95,8 +108,21 @@ contract JettonMinterSharded(
             bounce: true,
             mode: SendRemainingValue | SendBounceIfActionFail,
             body: msg.mintMessage.toCell(),
-            init: initOf JettonWalletSharded(msg.receiver, myAddress(), 0),
+            init: initOf JettonWalletSharded(msg.receiver, myAddress()),
         }.toShard(receiverShard).send();
+    }
+
+    receive(msg: ClaimTON) {
+        require(sender() == self.owner, "Incorrect sender");
+        nativeReserve(minTonsForStorage, ReserveExact | ReserveBounceIfActionFail);
+
+        // we allow bounce here and don't handle it, if claim fails we just accept the TONs back
+        MessageParameters {
+            bounce: true,
+            to: msg.receiver,
+            value: 0,
+            mode: SendRemainingBalance,
+        }.send();
     }
 
     receive(msg: JettonUpdateContent) {
@@ -148,7 +174,7 @@ contract JettonMinterSharded(
 }
 
 inline fun getJettonWalletInit(address: Address): Cell {
-    let init = initOf JettonWalletSharded(address, myAddress(), 0);
+    let init = initOf JettonWalletSharded(address, myAddress(), codeOf JettonWalletSharded);
 
     return beginCell().storeShardedStateInit(init).endCell();
 }
@@ -158,7 +184,7 @@ inline fun getJettonWalletByOwner(jettonWalletOwner: Address): Address {
 
     let ownerShard = jettonWalletOwner.getShard();
 
-    let expectedAddr = beginCell()
+    let expectedAddr: Slice = beginCell()
         .storeUint(4, 3) // addr_std$10, anycast: false
         .storeUint(0, 8) // workchain_id: 0
         .storeUint(changeShard(init.hash(), ownerShard), 256)
