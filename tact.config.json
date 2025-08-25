@@ -1,4 +1,6 @@
 {
+    
+    "$schema": "http://raw.githubusercontent.com/tact-lang/tact/main/src/config/configSchema.json",
     "projects": [
         {
             "name": "Jetton",
@@ -12,7 +14,10 @@
                 "interfacesGetter": false,
                 "experimental": {
                     "inline": true
-                }
+                },
+                "safety": {
+                    "nullChecks": true
+        }
             }
         },
         {
@@ -65,8 +70,12 @@
                     "inline": true
                 },
                 "optimizations": {
-                    "alwaysSaveContractData": false
-                }
+                    "alwaysSaveContractData": false,
+                    "internalExternalReceiversOutsideMethodsMap": false
+                },
+                "safety": {
+                    "nullChecks": false
+        }
             }
         }
     ]

@@ -9,4 +9,3 @@ const Basechain: Int = 0;
 // This is an approximate value. Real one must be less than this, and it is checked in tests.
 const walletStateInitCells: Int = 30;
 const walletStateInitBits: Int = 20000;
-// TODO: consts for other txns mint etc.
