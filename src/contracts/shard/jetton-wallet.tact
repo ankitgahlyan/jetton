@@ -7,69 +7,93 @@ import "./shard-utils";
 import "./send";
 import "../utils";
 
-//TODO: USE initof deploy to pass id(need for ? ) mapping
 // TODO: implement traits ownableTransferable(to nominee) or internal update, delayedUpgradable
 // TODO: p2p upgrades of walletcode + mbrpAmount etc using minter's signed payload
 // call minter to update constants(mbrp) but only upwards is possible
-//TODO: MINT to owner 1 token on init and to minter on master init
 //TODO: api to change invitor when/where fees goes for public works
 //TODO: change gas co n sts
-contract JettonWalletSharded {//FossFiatWallet
+// ERROR_CODES ===============================================================================================================
+const INCORRECT_SENDER: Int = 700;
+const ACCOUNT_TERMINATED: Int = 701;
+const ACCOUNT_INACTIVE: Int = 702;
+const INSUFFICIENT_TON: Int = 703;
+const RESERVED_INTERNAL: Int = 704;
+//const MAX_CONNECTIONS: Int = 705;
+const NO_PENDING_REQUEST: Int = 706;
+const CANT_UNFOLLOW_REPORTED: Int = 707;
+const SELF_DISPUTE_NOT_ALLOWED: Int = 708;
+const INSUFFICIENT_BALANCE: Int = 709;
+const ALREADY_REPORTED: Int = 710;
+const ACCOUNT_NOT_REPORTED: Int = 711;
+const NOT_AUTHORIZED: Int = 712;
+
+// CONTRACT_CONSTS ===========================================================================================================
+const MAX_CONNECTIONS: Int = 250; //coz of msg sending constraints
+
+contract JettonWalletSharded {
     //STOP incoming tokens txn after transferredto nominee
     //id token: signed payload by master
-    owner: Address; // wallet w5 contract(customizable)
-    minter: Address; // treat as treasury + sudo(unbacked minting & force transfer like in governance)
-    balance: Int as coins = ton("1"); //jettons r != tons
-    nominee: Address = emptyAddress(); // beneficiary; emptyAddress() as sentinel for "not set"
-    invitor: Address = emptyAddress(); //guarantor/offchain-contact responsible for kyc + education + proposal, propagator,TODO: nominee is appointed for all invited after it's demise; inactive account if null(no ops allowed perhaps)
-    invited: map<Address, Int as uint8>; //Array?,TODO: WHAThappens when uint8 is full
-    friends: map<Address, Int as uint16>; //if following followsBack or follower is followedBack then add here and remove there for saving time & space
-    pendingRequests: map<Address, Int as uint16>;
-    followers: map<Address, Int as uint16>; //TODO: make uint and change used INITS, atleast invitor follows so can't be null, OR CANBE INACTIVE ACCOUNTS
-    followings: map<Address, Int as uint16>; //TODO: use max 1k coz of storage constraints
-    debts: map<Address, Int as uint32>; //use foreach
-    reports: map<Address, Bool>; //TODO: consider reporter side data store then support and dispute there for less txns
-    reportReason: Bool = false; // true for genuineClosingOnDeath, false for fraud/duplicateIdsAccounts; default false meaning "unset/false"
-    reporterCount: Int as uint16 = 0;
-    disputerCount: Int as uint16 = 0;
-    reportResolutionTime: Int as uint32 = 0;
-    connectionsCount: Int as uint8 = 0;
+    // CONTRACT_PERSISTENT_STORE =============================================================================================
+    owner: Address;
+    minter: Address; // treat as treasury + sudo(unbacked minting & force transfer like in governance), use dao address
+    minterOwner: Address;
+    balance: Int as coins = ton("1");
+    nominee: Address?;
+    invitor: Address?;//guarantor/offchain-contact responsible for kyc + education + proposal, propagator,TODO: nominee is appointed for all invited after it's demise; inactive account if null(no ops allowed perhaps)
+    invited: map<Address, Int as uint12>;//TODO: need counter/check?or default exitCode5isEnough
+    friends: map<Address, Int as uint12>;//if following followsBack or follower is followedBack then add here and remove there for saving time/compute & space/storage
+    pendingRequests: map<Address, Int as uint12>;
+    followers: map<Address, Int as uint12>;
+    followings: map<Address, Int as uint12>;//4096 TODO: use max 255 coz of !storage/msg constraints
+    debts: map<Address, Int as uint20>;//1,048,576, mbrp*maxConnections(friends+fans+faned)
+    reports: map<Address, Bool>; //TODO: consider reporter side data store then support and dispute there for less txns,tradeoff -> only one report at aTime
+    reportReason: Bool = false; // true for genuineClosingOnDeath, false for fraud/duplicateIdsAccounts
+    reporterCount: Int as uint10 = 0; //TODO: delegate2dao/admin handles out of range complaints
+    disputerCount: Int as uint10 = 0;//1024
+    reportResolutionTime: Int as uint32 = 0;//4,294,967,296
+    connectionsCount: Int as uint8 = 0;//256
     terminated: Bool = false;
     //bloacklist: map<Address, Int as uint8>;//blocklist+blacklist
     //adminOps
-    maxConnections: Int as uint8 = 200; //FIXME: deranged?
+    // Dynamically adjustable configuration parameters
     mbrpAmount: Int as coins = ton("1000");
-    closureWait: Int as uint16 = 86400;
+    closureWait: Int as uint32 = 86400;
     freeze: Bool = false;
+    //stores coz of chain/design constraints
+    lastFollower: Address?;//for reversing bounced msg
+    lastFollowing: Address?;
+    lastFriend: Address?;
 
-    init(owner: Address, minter: Address) { //TODO: take coordinates
-        //self.balance = ton("1");//TODO: OK?
+    //======================================================INIT==============================================================
+    init(owner: Address, minter: Address , minterOwner: Address) { //TODO: take coordinates
         self.owner = owner;
         self.minter = minter;
-        //self.nominee = sender(); //TODO: consider storing contrAddresses as contacts
+        self.minterOwner = minterOwner;
+        //notify TODO: or on invite
     }
 
+    //====================================================RECEIVERS===========================================================
     receive(msg: JettonTransfer) {
-        let sender = sender();
+        let sender = sender(); //TODO: Check whole callChain if var is used? twice?
         let receiver = msg.destination;
         let amount = msg.amount;
 
-        require(sender == self.owner, "Incorrect sender");//self.root
-        require(!self.terminated, "accountTerminated"); //rootCanRestoreTODO:
-        require(self.invitor != emptyAddress(), "yourAccountIsInactive"); //allOps r paused, accfreeze
+        throwUnless(INCORRECT_SENDER, sender == self.owner);
+        throwUnless(ACCOUNT_TERMINATED, !self.terminated);//rootCanRestorejustinCase
+        throwUnless(ACCOUNT_INACTIVE, self.invitor != null || self.owner == self.minter);//TODO:
         forceBasechain(receiver);
 
         checkEitherForwardPayload(msg.forwardPayload);
 
         let ctx = context();
         let fwdCount = 1 + sign(msg.forwardTonAmount); // msg.forwardTonAmount is coins, so it's positive
-        require(
+        throwUnless(
+            INSUFFICIENT_TON,
             ctx.value >
             msg.forwardTonAmount +
             fwdCount * ctx.readForwardFee() +
             getForwardFee(walletStateInitCells, walletStateInitBits, false) +
-            (2 * getComputeFee(gasForTransfer, false) + minTonsForStorage),
-            "Insufficient amount of TON attached",
+            (2 * getComputeFee(gasForTransfer, false) + minTonsForStorage)
         );
 
         if (amount < ton("1")) {
@@ -84,20 +108,22 @@ contract JettonWalletSharded {//FossFiatWallet
             } else if (amount == ton("0.5")) { // 0.3 token - dispute
                 self.dispute(sender, receiver);
             } else if (amount == ton("0.6")) { // 0.4 token - process report
-                self.reportResolution(sender, receiver, msg);
+                self.reportResolution();
             } else if (amount == ton("0.7")) { // 0.4 token - process report
                 self.nominee = receiver;
                 //self.changeNominee(receiver);
                 return; //maybe notify msg.destination
             } else if (amount == ton("0.9")) { // 0.1 token - invite/follow/unfollow
-                self.folllow(receiver, self.mbrpAmount, msg); //TODO: location params from custom payload forwardPayload
+                self.folllow(receiver, self.mbrpAmount); //TODO: location params from custom payload forwardPayload
+            } else if (amount == ton("0.11")) { //clean requests to free contract storage
+                self.clearAllRequests();
             } else if (amount == ton("0.01") || amount == ton("0.02") || amount == ton("0.03")) { // reserved for invite
-                require(false, "reservedAmountForInternalOps"); //invite(mbrp),burn, reward(2xmbrp)
+                throwUnless(RESERVED_INTERNAL, false); //invite(mbrp),burn, reward(2xmbrp)
             } else if (sender == self.minter) { // Admin operations (owner only)
                 self.adminAction(msg);
             }
         } else {
-            self.processTransfer(msg);
+            self.transfer(amount);
         } // Standard transfer
 
         //let destinationShard = receiver.getShard();
@@ -114,28 +140,30 @@ contract JettonWalletSharded {//FossFiatWallet
                 forwardTonAmount: msg.forwardTonAmount,
                 forwardPayload: msg.forwardPayload,
             }.toCell(),
-            init: self.getJettonWalletInit(receiver),
+            init: self.getInit(msg.destination),
         }.toShard(receiver.getShard()).send();
     }
 
     receive(msg: JettonTransferInternal) {
-        require(!self.terminated, "accountTerminated");
+        throwUnless(ACCOUNT_TERMINATED, !self.terminated); //deadPersonsAccounts or duplicateClosedaAccs
         let sender = msg.sender;
+        let senderC = sender();
         let amount = msg.amount;
 
         // This message should come only from other JettonWallet or minter/sudo
-        let wallet: StateInit = self.getJettonWalletInit(sender);
-        if (!(wallet.hasSameBasechainAddressWithoutShard(sender()))) {
+        let wallet: StateInit = self.getInit(sender);
+        if (!(wallet.hasSameBasechainAddressWithoutShard(senderC))) {
             //TODO: master can't mint so remove and return
-            require(self.minter == sender(), "Incorrect sender");
+            throwUnless(INCORRECT_SENDER, self.minter == sender());
         }
+
         if (amount != ton("0.1")) {
-            require(self.invitor != emptyAddress(), "receiverAccountIsInactive");
+            throwUnless(ACCOUNT_INACTIVE, self.invitor != null || sender == self.minterOwner);
         }
 
         if (amount < ton("1")) { //special/semantic txns.
             if (amount == ton("0.1")) { // friend request
-                self.friendRequestInternal(sender);
+                self.friendRequestInternal(sender, senderC, msg);
             } else if (amount == ton("0.2")) { // confirm request
                 self.confirmFRequestInternal(sender);
             } else if (amount == ton("0.3")) { //report duplicateIds
@@ -145,14 +173,14 @@ contract JettonWalletSharded {//FossFiatWallet
             } else if (amount == ton("0.5")) { // 0.3 token - dispute
                 self.disputeInternal(sender);
             } else if (amount == ton("0.6")) { // 0.4 token - process report
-                self.reportResolutionInternal(sender);
+                self.reportResolutionInternal(msg);
             } else if (amount == ton("0.9")) { // 0.1 token - invite/follow/unfollow
-                self.folllowInternal(sender(), msg); //TODO: location params from custom payload/forwardPayload
+                self.folllowInternal(sender, senderC, msg); //TODO: location params from custom payload/forwardPayload
             } else if (sender == self.minter) { // Admin operations (owner only)
-                self.adminActionInternal(amount, msg.destination);
+                self.adminActionInternal(msg);
             }
         } else {
-            self.transferInternal(amount, msg);
+            self.transferInternal(amount, msg.sender);
         } // Standard transfer
         let ctx: Context = context();
         let msgValue: Int = ctx.value;
@@ -187,32 +215,42 @@ contract JettonWalletSharded {//FossFiatWallet
         }
     }
 
+    //====================================================INTERNAL_FUNCTIONS==================================================
     inline fun friendRequest(target: Address, amount: Int) {
         // Ensure we have room for new connections before creating a pending request
-        require(self.connectionsCount < self.maxConnections, "maxConnectionsReached");
+        throwUnless(MAX_CONNECTIONS, self.connectionsCount < MAX_CONNECTIONS);
+        if (self.followers.exists(target)) {
+            self.folllow(target, amount);
+        }
     }
 
-    inline fun friendRequestInternal(sender: Address, amount: Int) {
-        self.pendingRequests.set(sender, amount);
+    inline fun friendRequestInternal(sender: Address, senderC: Address, msg: JettonTransferInternal) {
+        if (self.invitor == null) {
+            self.invite(sender, senderC, msg);//TODO: 
+            return;
+        }
+        if (self.followings.exists(sender)) {
+            self.folllowInternal(sender, senderC, msg);
+            return;
+        }
+        self.pendingRequests.set(sender, self.mbrpAmount);
     }
 
     inline fun confirmFRequest(target: Address, msg: JettonTransfer) {
         // Confirm a pending friend request and create mutual friendship
-        require(self.pendingRequests.exists(target), "noPendingRequest");
+        throwUnless(NO_PENDING_REQUEST, self.pendingRequests.exists(target));
         // Do not exceed max connections
-        require(self.connectionsCount < self.maxConnections, "maxConnectionsReached");
+        throwUnless(MAX_CONNECTIONS, self.connectionsCount < MAX_CONNECTIONS);
 
-        // Remove any one-sided entries and create friends entry
-        if (self.followings.exists(target)) {
-            let _ = self.followings.del(target);
-        }
-        if (self.followers.exists(target)) {
+        if (self.followers.exists(target)) { //follower sends request
             let _ = self.followers.del(target);
+        } else {
+            self.transferInternal(self.mbrpAmount, target);
         }
 
         self.friends.set(target, self.mbrpAmount);
+        self.lastFriend = target;
         let _ = self.pendingRequests.del(target);
-        self.transferInternal(self.mbrpAmount, target);
         self.connectionsCount += 1;
     }
 
@@ -221,10 +259,19 @@ contract JettonWalletSharded {//FossFiatWallet
             //mint
             self.transferInternal(self.mbrpAmount, sender);
         }
+        self.friends.set(sender, self.mbrpAmount);
+        self.connectionsCount += 1;
+    }
+
+    inline fun clearAllRequests() {
+        if (!self.pendingRequests.isEmpty()) {
+            self.pendingRequests = null; //emptyMap();
+        }
+        emit("clearedPendingRequests".asComment()); //TODO: handle events
     }
 
     // Optimized follow logic with reduced state reads
-    inline fun folllow(target: Address, amount: Int, msg: JettonTransfer) {
+    inline fun folllow(target: Address, amount: Int) {
         //let amount = self.mbrpAmount;//TODO:update using call to minter upwards only possible
 
         //require(sender != target, "can't follow self");//handle bad behaviour by reports(optimistic approach)
@@ -235,39 +282,44 @@ contract JettonWalletSharded {//FossFiatWallet
 
         if (self.followers.exists(target)) {
             // Create friends only if capacity allows
-            require(self.connectionsCount < self.maxConnections, "maxConnectionsReached");
+            throwUnless(MAX_CONNECTIONS, self.connectionsCount < MAX_CONNECTIONS);
 
             //let _ = self.followings.del(target);
             let _ = self.followers.del(target);
             // store friendship marker (use mbrpAmount as stored value)
             self.friends.set(target, self.mbrpAmount);
+            // track last friend created
+            self.lastFriend = target;
             self.connectionsCount += 1;
         } else {
             self.followings.set(target, amount);
+            // remember last following created (owner follows target)
+            self.lastFollowing = target;
         }
     }
 
-    inline fun folllowInternal(senderContract: Address, msg: JettonTransferInternal) {
-        if (self.invitor == emptyAddress() && self.followers.isEmpty()) {
-            self.processInvite(senderContract, msg);
+    inline fun folllowInternal(sender: Address, senderC: Address, msg: JettonTransferInternal) {
+        if (self.invitor == null && self.followers.isEmpty()) {
+            self.invite(sender, senderC, msg);
             return;
         }
-        if (self.followers.exists(msg.sender)) {
-            self.processUnfollowInternal(msg);
+        if (self.followers.exists(sender)) {
+            self.unfollowInternal(msg);
             return;
         }
 
         self.balance += self.mbrpAmount;
 
         // If we already follow that address, upgrade to friends and remove single-sided entries
-        if (self.followings.exists(msg.sender)) {
+        if (self.followings.exists(sender)) {
             // Create friends only if capacity allows
-            require(self.connectionsCount < self.maxConnections, "maxConnectionsReached");
+            throwUnless(MAX_CONNECTIONS, self.connectionsCount < MAX_CONNECTIONS);
 
-            let _ = self.followings.del(msg.sender);
-            self.friends.set(msg.sender, self.mbrpAmount);
+            let _ = self.followings.del(sender);
+            self.friends.set(sender, self.mbrpAmount);
+            self.connectionsCount += 1;
         } else {
-            self.followers.set(msg.sender, self.mbrpAmount);
+            self.followers.set(sender, self.mbrpAmount);
             self.connectionsCount += 1;
         }
 
@@ -275,9 +327,12 @@ contract JettonWalletSharded {//FossFiatWallet
         //emitEvent(1, msg.sender, self.owner, msg.amount);
     }
 
-    inline fun processInvite(senderC: Address, msg: JettonTransferInternal) {
-        self.followers.set(msg.sender, ton("1"));
-        self.balance += ton("1");
+    inline fun invite(sender: Address, senderC: Address, msg: JettonTransferInternal) {
+        self.friends.set(msg.sender, self.mbrpAmount);
+        self.invitor = sender;
+        self.nominee = sender;
+        // track last follower created by invite
+        self.lastFriend = sender;
         //TODO: auto follows invitor & on unfollow invitor puts in bloacklist
         //TODO: mint in sender
         MessageParameters {
@@ -316,8 +371,8 @@ contract JettonWalletSharded {//FossFiatWallet
         }
     }
 
-    inline fun processUnfollowInternal(msg: JettonTransferInternal) {
-        require(self.reporterCount == 0, "canTUnfollowReported");
+    inline fun unfollowInternal(msg: JettonTransferInternal) {
+        throwUnless(CANT_UNFOLLOW_REPORTED, self.reporterCount == 0);
         let sender = msg.sender;
 
         // If they were friends, breaking follower side makes owner still follow them -> move to followings
@@ -334,7 +389,7 @@ contract JettonWalletSharded {//FossFiatWallet
         let _ = self.followers.del(sender);
 
         if (sender == self.invitor) {
-            self.invitor = emptyAddress();
+            self.invitor = null;
             //already burned from other
         } else { //burn from self
             self.internalBurn(sender, self.mbrpAmount);
@@ -345,28 +400,28 @@ contract JettonWalletSharded {//FossFiatWallet
     inline fun report(sender: Address, target: Address, reason: Bool, msg: JettonTransfer) {
         //require target is from same contract
         //require(target != self.owner || myAddress(), "Cannot report self");//programmedInHumans
-        require(target != self.minter, "noNoNo");
+        throwUnless(SELF_DISPUTE_NOT_ALLOWED, target != self.minter);
         // if (target == self.minter) {//govtWay of discouraging smartAsses/badBehaviour(stick over carrot)
         //     self.balance -= self.balance;
         //     require(false, "uROfficiallyFuckedBruhh!");
         // }
         self.balance -= self.mbrpAmount;
-        require(self.balance >= 0, "insufficientBalance");
+        throwUnless(INSUFFICIENT_BALANCE, self.balance >= 0);
     }
 
     inline fun reportInternal(sender: Address, reason: Bool, msg: JettonTransferInternal) {
-        //TODO: invitor auto disputes
+        //TODO: invitor auto disputes or noneed (consider disputed implicitly)
         if (reason) {
             self.reportReason = reason;
         } //false byDefault//TODO: reason complete?
-        require(self.invitor != emptyAddress(), "accountIsInactiveOrNonExistent");
-        require(!self.reports.exists(sender), "alreadyReported");
+        throwUnless(ACCOUNT_INACTIVE, self.invitor != null);
+        throwUnless(ALREADY_REPORTED, !self.reports.exists(sender));
         self.reports.set(sender, true);
         self.reporterCount += 1;
         self.reportResolutionTime = now() + self.closureWait; //TODO: INC time onlyIf this overtakes others(disputers)
 
-        let receiver = self.invitor; // emptyAddress() sentinel handled by require above
-        let walletInit = getJettonWalletInit(receiver);
+        let receiver = self.invitor!!; // null sentinel handled by require above
+        let walletInit = self.getInit(receiver);
         let receiverAddr = contractShardBasechainAddress(walletInit);
         //burn/stake from target's invitor once in case of duplicateId only
         if (reason && self.reports == null) {
@@ -382,21 +437,21 @@ contract JettonWalletSharded {//FossFiatWallet
                     forwardTonAmount: msg.forwardTonAmount,
                     forwardPayload: msg.forwardPayload,
                 }.toCell(),
-                init: walletInit, //self.getJettonWalletInit(receiver),
+                init: walletInit,
             }.toShard(receiver.getShard()).send();
         }
     }
 
     inline fun dispute(sender: Address, target: Address) {
         //stake
-        require(target != self.minter, "noNoNo");
-        require(sender != target, "can'tDisputeSelf");
+        throwUnless(SELF_DISPUTE_NOT_ALLOWED, target != self.minter);
+        throwUnless(SELF_DISPUTE_NOT_ALLOWED, sender != target);
         self.balance -= self.mbrpAmount;
-        require(self.balance >= 0, "insufficientBalance");
+        throwUnless(INSUFFICIENT_BALANCE, self.balance >= 0);
     }
 
     inline fun disputeInternal(sender: Address) {
-        require(self.reporterCount > 0, "accountNotReported");
+        throwUnless(ACCOUNT_NOT_REPORTED, self.reporterCount > 0);
         self.reports.set(sender, false);
         self.disputerCount += 1;
         self.reportResolutionTime = now() + self.closureWait;
@@ -404,9 +459,10 @@ contract JettonWalletSharded {//FossFiatWallet
 
     inline fun reportResolution() {}
 
-    inline fun reportResolutionInternal() {
-        require(self.reportResolutionTime > 0, "noReportPending");
-        require(now() >= self.reportResolutionTime, "waitUntilResolutionTime");
+    //TODO: batch msg about total dec in conn. on close
+    inline fun reportResolutionInternal(msg: JettonTransferInternal) {
+        throwUnless(NO_PENDING_REQUEST, self.reportResolutionTime > 0); //notOptional it's semantic otherwise need null
+        throwUnless(INSUFFICIENT_TON, now() >= self.reportResolutionTime);
 
         let reporters = self.reporterCount;
         let disputers = self.disputerCount;
@@ -426,7 +482,7 @@ contract JettonWalletSharded {//FossFiatWallet
 
         // Distribute rewards: first `losersCount` winners get 2x, remaining winners get 1x.
         // Remove entries as we process them so the following foreach (below) becomes a no-op.
-        foreach (addr, flag in self.reports) { //TODO: can send only around 250 msg(maybe keep count & send last msg to self to process remaining txns)
+        foreach (addr, flag in self.reports) { //TODO: can send only around 250 msg(maybe keep count & send last msg to self to process remaining txns),forNow maxConn are 200
             // determine if this entry is a winner
             if ((flag && reportWinCloseAcc) || (!flag && !reportWinCloseAcc)) {
                 let reward: Int = 0;
@@ -438,7 +494,7 @@ contract JettonWalletSharded {//FossFiatWallet
                 }
 
                 MessageParameters {
-                    to: contractShardBasechainAddress(self.getJettonWalletInit(addr)),
+                    to: contractAddress(self.getInit(addr)),
                     value: 0,
                     mode: SendRemainingValue,
                     bounce: true,
@@ -446,9 +502,9 @@ contract JettonWalletSharded {//FossFiatWallet
                         queryId: 0,
                         amount: reward,
                         sender: self.owner,
-                        responseDestination: null,
+                        responseDestination: self.owner,
                         forwardTonAmount: 0,
-                        forwardPayload: null,
+                        forwardPayload: msg.forwardPayload,
                     }.toCell(),
                 }.send();
             }
@@ -463,50 +519,8 @@ contract JettonWalletSharded {//FossFiatWallet
 
             // First iterate followings
             foreach (addr, _ in self.followings) {
-                let inFollowers: Bool = self.followers.exists(addr) || self.friends.exists(addr);
-
-                let burnAmount: Int = 0;
-                if (inFollowers) {
-                    burnAmount = ton("0.03");
-                } else {
-                    burnAmount = ton("0.02");
-                }
-
                 MessageParameters {
-                    to: contractShardBasechainAddress(self.getJettonWalletInit(addr)),
-                    value: 0,
-                    mode: SendRemainingValue,
-                    bounce: true,
-                    body: JettonTransferInternal {
-                        queryId: 0,
-                        amount: burnAmount,
-                        sender: self.owner,
-                        responseDestination: null,
-                        forwardTonAmount: 0,
-                        forwardPayload: null,
-                    }.toCell(),
-                }.send();
-
-                // Remove relations: if friend, remove friend and also remove follower entry
-                if (self.friends.exists(addr)) {
-                    let _ = self.friends.del(addr);
-                    let _ = self.followers.del(addr);
-                    if (self.connectionsCount > 0) {
-                        self.connectionsCount -= 1;
-                    }
-                }
-                let _ = self.followings.del(addr);
-            }
-
-            // Now handle remaining followers that were not in followings (and not in friends)
-            foreach (addr, _ in self.followers) {
-                if (self.friends.exists(addr)) {
-                    continue;
-                }
-
-                // only in followers -> single burn
-                MessageParameters {
-                    to: contractShardBasechainAddress(self.getJettonWalletInit(addr)),
+                    to: contractAddress(self.getInit(addr)),
                     value: 0,
                     mode: SendRemainingValue,
                     bounce: true,
@@ -516,11 +530,53 @@ contract JettonWalletSharded {//FossFiatWallet
                         sender: self.owner,
                         responseDestination: null,
                         forwardTonAmount: 0,
-                        forwardPayload: null,
+                        forwardPayload: msg.forwardPayload,
                     }.toCell(),
                 }.send();
 
-                //let _ = self.followers.del(addr);
+                if (self.connectionsCount > 0) {
+                    self.connectionsCount -= 1;
+                }
+                let _ = self.followings.del(addr);
+            }
+
+            // Now handle remaining followers
+            foreach (addr, _ in self.followers) {
+                MessageParameters {
+                    to: contractAddress(self.getInit(addr)),
+                    value: 0,
+                    mode: SendRemainingValue,
+                    bounce: true,
+                    body: JettonTransferInternal {
+                        queryId: 0,
+                        amount: ton("0.02"),
+                        sender: self.owner,
+                        responseDestination: null,
+                        forwardTonAmount: 0,
+                        forwardPayload: msg.forwardPayload,
+                    }.toCell(),
+                }.send();
+
+                let _ = self.followers.del(addr);
+            }
+
+            // Now handle remaining followers
+            foreach (addr, _ in self.friends) {
+                MessageParameters {
+                    to: contractAddress(self.getInit(addr)),
+                    value: 0,
+                    mode: SendRemainingValue,
+                    bounce: true,
+                    body: JettonTransferInternal {
+                        queryId: 0,
+                        amount: ton("0.03"), //2x burn
+                        sender: self.owner,
+                        responseDestination: null,
+                        forwardTonAmount: 0,
+                        forwardPayload: msg.forwardPayload,
+                    }.toCell(),
+                }.send();
+                let _ = self.friends.del(addr);
             }
             self.terminated = true;
         } else {
@@ -532,16 +588,18 @@ contract JettonWalletSharded {//FossFiatWallet
         }
     }
 
-    inline fun processTransfer(msg: JettonTransfer) {
+    inline fun transfer(amount: Int) {
         //TODO: if (self.balance < 0) {adjust debts}//consider using debts only instead of -veBalance
         self.balance -= amount;
-        require(self.balance >= 0, "Incorrect balance after send");
+        throwUnless(INSUFFICIENT_BALANCE, self.balance >= 0);
     }
 
-    inline fun transferInternal(amount: Int, sender: Address ) {
+    inline fun transferInternal(amount: Int, sender: Address) {//TODO: adjust this logic in receiver maybe
         if (amount == ton("0.01")) { //invite
             amount = self.mbrpAmount;
             self.invited.set(sender, self.mbrpAmount); //TODO: Bool instead of mbrp
+            self.friends.set(sender, self.mbrpAmount);
+            let _ = self.followings.del(sender);
         } else if (amount == ton("0.02")) { //from internalreport invitor burn
             self.internalBurn(sender, self.mbrpAmount); //TODO: need modular funs  
             return;
@@ -552,12 +610,15 @@ contract JettonWalletSharded {//FossFiatWallet
         self.balance += amount;
     }
 
-    // fun changeNominee(nominee: Address) {
+    // fun changeNominee(nominee: Address) {//small logic, so adjusted in receiver
     //     self.nominee = nominee;
     // }
+    fun adminAction(msg: JettonTransfer) {}
+
+    fun adminActionInternal(msg: JettonTransferInternal) {}
 
     receive(msg: ProvideWalletBalance) {
-        require(!self.terminated, "accountTerminated");
+        throwUnless(ACCOUNT_TERMINATED, !self.terminated);
         let info: VerifyInfo? = null;
         if (msg.includeVerifyInfo) {
             info = VerifyInfo {
@@ -579,17 +640,17 @@ contract JettonWalletSharded {//FossFiatWallet
     }
 
     receive(msg: JettonBurn) {
-        require(!self.terminated, "accountTerminated");
+        throwUnless(ACCOUNT_TERMINATED, !self.terminated);
         // we can skip forceBasechain here because with other checks in place it's not possible
         // to acquire jettons outside of basechain, so amount check is enough
-        require(sender() == self.owner, "Incorrect sender");
+        throwUnless(INCORRECT_SENDER, sender() == self.owner);
 
         self.balance -= msg.amount;
-        require(self.balance >= 0, "Incorrect balance after send");
+        throwUnless(INSUFFICIENT_BALANCE, self.balance >= 0);
 
         let ctx = context();
         let fwdFee: Int = ctx.readForwardFee();
-        require(ctx.value > (fwdFee + 2 * getComputeFee(gasForBurn, false)), "Insufficient amount of TON attached");
+        throwUnless(INSUFFICIENT_TON, ctx.value > (fwdFee + 2 * getComputeFee(gasForBurn, false)));
 
         MessageParameters {
             to: self.minter,
@@ -606,8 +667,8 @@ contract JettonWalletSharded {//FossFiatWallet
     }
 
     receive(msg: ClaimTON) {
-        require(!self.terminated, "accountTerminated");
-        require(sender() == self.owner, "Incorrect sender");
+        throwUnless(ACCOUNT_TERMINATED, !self.terminated);
+        throwUnless(INCORRECT_SENDER, sender() == self.owner);
         nativeReserve(minTonsForStorage, ReserveExact | ReserveBounceIfActionFail);
 
         // we allow bounce here and don't handle it, if claim fails we just accept the TONs back
@@ -618,50 +679,58 @@ contract JettonWalletSharded {//FossFiatWallet
         }.send();
     }
 
-    receive("updateMBRP") {
-        require(!self.terminated, "accountTerminated");
-        //TODO: v2
-    }
+    // receive("updateMBRP") {
+    //     throwUnless(ACCOUNT_TERMINATED, !self.terminated);
+    //     //TODO: v2
+    // }
 
     bounced(msg: bounced<JettonTransferInternal>) {
         // Revert storage changes caused by semantic operations or transfers that failed
         if (msg.amount < ton("1")) {
-            // Handle small semantic amounts (follow, report, dispute, etc.)
-            if (msg.amount == ton("0.9")) {
-                // friend request failed — remove pending request
-                if (self.pendingRequests.exists(msg.sender)) {
-                    let _ = self.pendingRequests.del(msg.sender);
+            // friend request (pending request) failed
+            if (msg.amount == ton("0.2")) {
+                
+                if (self.lastFriend != null) {
+                    
                 }
-            } else if (msg.amount == ton("0.1")) {
-                // Follow / unfollow: try to undo any changes in followings/followers/friends maps
-                if (self.followings.exists(msg.sender)) {
-                    let _ = self.followings.del(msg.sender);
-                }
-                if (self.followers.exists(msg.sender)) {
-                    let _ = self.followers.del(msg.sender);
-                }
-                if (self.friends.exists(msg.sender)) {
-                    let _ = self.friends.del(msg.sender);
-                    if (self.connectionsCount > 0) {
-                        self.connectionsCount -= 1;
+            } else if (msg.amount == ton("0.9")) { // follow / invite operations
+                // If a follower record was just created, revert it and adjust balance
+                if (self.lastFollower != null) {
+                    let lastFollower = self.lastFollower!!;
+                    if (self.followers.exists(lastFollower)) {
+                        let _ = self.followers.del(lastFollower);
                     }
-                }
-            } else if (msg.amount == ton("0.2") || msg.amount == ton("0.5") || msg.amount == ton("0.3")) {
-                // Reports / process report: revert report entry and adjust counters when possible
-                if (self.reports.exists(msg.sender)) {
-                    let flag: Bool = self.reports.get(msg.sender)!!;
-                    if (flag) {
-                        if (self.reporterCount > 0) {
-                            self.reporterCount -= 1;
-                        }
+                    // revert minted reward on follower creation
+                    if (self.balance >= self.mbrpAmount) {
+                        self.balance -= self.mbrpAmount;
                     } else {
-                        if (self.disputerCount > 0) {
-                            self.disputerCount -= 1;
-                        }
+                        self.balance = 0;
                     }
-                    let _ = self.reports.del(msg.sender);
+                    self.lastFollower = null;
+                    if (self.connectionsCount > 0) { self.connectionsCount -= 1; }
                 }
-                self.balance += msg.amount;
+
+                // If a following was just created by owner, revert it
+                if (self.lastFollowing != null) {
+                    let lf = self.lastFollowing!!;
+                    if (self.followings.exists(lf)) {
+                        let _ = self.followings.del(lf);
+                    }
+                    self.lastFollowing = null;
+                }
+
+                // If a friendship was just established, revert it
+                if (self.lastFriend != null) {
+                    let lfnd = self.lastFriend!!;
+                    if (self.friends.exists(lfnd)) {
+                        let _ = self.friends.del(lfnd);
+                        if (self.connectionsCount > 0) { self.connectionsCount -= 1; }
+                    }
+                    self.lastFriend = null;
+                }
+            } else if (msg.amount == ton("0.3") || msg.amount == ton("0.4") || msg.amount == ton("0.5")) {
+                // refund stake
+                self.balance += self.mbrpAmount;//needAdjustDebt?               
             } else {
                 // Other small semantic amounts: nothing to revert by default
             }
@@ -675,8 +744,6 @@ contract JettonWalletSharded {//FossFiatWallet
         self.balance += msg.amount;
     }
 
-    
-
     // helpers
     inline fun _deductDebt(amount: Int): Int {
         let remaining: Int = amount;
@@ -688,15 +755,10 @@ contract JettonWalletSharded {//FossFiatWallet
         // Pay debts in map order until remaining is exhausted
         foreach (follower, debtVal in self.debts) {
             if (remaining <= 0) {
-                break;
+                return 0; //return remaining;TODO:
             }
 
             let debt: Int = debtVal;
-            if (debt <= 0) {
-                let _ = self.debts.del(follower);
-                continue;
-            }
-
             let pay = 0;
             if (remaining >= debt) {
                 pay = debt;
@@ -735,15 +797,13 @@ contract JettonWalletSharded {//FossFiatWallet
 
         let prevDebt: Int = 0; // TODO: need this? 
         if (self.debts.exists(unfollower)) {
-            prevDebt = self.debts.get(unfollower);
+            prevDebt = self.debts.get(unfollower)!!;
         }
         self.debts.set(self.minter, prevDebt + shortfall);
     }
 
-
-
     get fun get_wallet_data(): JettonWalletData {
-        require(!self.terminated, "accountTerminated");
+        throwUnless(ACCOUNT_TERMINATED, !self.terminated);
         return JettonWalletData {
             balance: self.balance,
             owner: self.owner,
@@ -752,26 +812,23 @@ contract JettonWalletSharded {//FossFiatWallet
         };
     }
 
+    get fun get_invitor_nominee(): InvitorNominee {
+        return InvitorNominee {
+            invitor: self.invitor,
+            nominee: self.nominee,
+        };
+    }
+
     get fun get_friends_and_followings(): FriendsAndFollowings {
-        require(!self.terminated, "accountTerminated");
-        require(self.friends.exists(sender()) || self.followers.exists(sender()), "notAuthorized");
+        throwUnless(ACCOUNT_TERMINATED, !self.terminated);
+        throwUnless(NOT_AUTHORIZED, self.friends.exists(sender()) || self.followers.exists(sender()));
         return FriendsAndFollowings {
             friends: self.friends,
             followings: self.followings,
-        }
+        };
     }
 
-    fun getJettonWalletInit(address: Address): StateInit {
-        return initOf JettonWalletSharded(address, self.minter);
-            //myCode(),
-            // myAddress(),
-            // emptyMap(),
-            // myAddress(),
-            // 0,
-            // map<Address, Int as uint16> {myAddress(): self.mbrpAmount},
-            // emptyMap(),
-            // emptyMap(),
-            // myAddress() sentinel used by default params
-        //);
+    fun getInit(address: Address): StateInit {
+        return initOf JettonWalletSharded(address, self.minter, self.minterOwner);
     }
 }

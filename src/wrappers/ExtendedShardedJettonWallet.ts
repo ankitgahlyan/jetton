@@ -17,8 +17,8 @@ export class ExtendedShardedJettonWallet extends JettonWalletSharded {
         super(address, init)
     }
 
-    static async fromInit(owner: Address, minter: Address, balance: bigint) {
-        const base = await JettonWalletSharded.fromInit(owner, minter, balance)
+    static async fromInit(owner: Address, minter: Address) {
+        const base = await JettonWalletSharded.fromInit(owner, minter)
         if (base.init === undefined) {
             throw new Error("JettonWalletSharded init is not defined")
         }

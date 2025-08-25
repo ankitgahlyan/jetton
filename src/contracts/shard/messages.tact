@@ -199,8 +199,13 @@ message(0x16) NetworkEvent {
 }
 
 struct FriendsAndFollowings {
-    friends: map<Address, Int>;
-    followings: map<Address, Int>;
+    friends: map<Address, Int as uint12>;
+    followings: map<Address, Int as uint12>;
+}
+
+struct InvitorNominee {
+    invitor: Address?;
+    nominee: Address?;
 }
 
 struct JettonData {
@@ -238,15 +243,6 @@ message(0xf8a7ea5) JettonTransfer {
 }
 
 message(0x178d4519) JettonTransferInternal {
-    queryId: Int as uint64;
-    amount: Int as coins;
-    sender: Address;
-    responseDestination: Address?;
-    forwardTonAmount: Int as coins;
-    forwardPayload: Slice as remaining;
-}
-
-message(1) JettonMintInternal {
     queryId: Int as uint64;
     amount: Int as coins;
     sender: Address;
@@ -295,10 +291,10 @@ message(0xd1735400) TakeWalletAddress {
 message(0x642b7d07) Mint {
     queryId: Int as uint64;
     receiver: Address;
-    mintMessage: JettonMintInternal;
+    mintMessage: JettonTransferInternal;
 }
 
-message(0) Mintable {
+message(2) Mintable {
     mintable: Bool;
 }
 

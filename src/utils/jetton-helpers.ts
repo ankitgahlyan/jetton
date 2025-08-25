@@ -10,6 +10,7 @@ import {TonClient} from "@ton/ton"
 import chalk from "chalk"
 import {GovernanceJettonMinter} from "../output/Governance_GovernanceJettonMinter"
 import {JettonMinterFeatureRich} from "../output/FeatureRich_JettonMinterFeatureRich"
+import {JettonMinterSharded} from "../output/Shard_JettonMinterSharded"
 
 const ONCHAIN_CONTENT_PREFIX = 0x00
 const SNAKE_PREFIX = 0x00
@@ -130,7 +131,7 @@ export async function validateJettonParams(
 
 export async function buildJettonMinterFromEnv(
     deployerAddress: Address,
-    type: "base" | "governance" | "feature-rich",
+    type: "base" | "governance" | "feature-rich" | "shard",
 ) {
     const jettonParams = {
         name: process.env.JETTON_NAME ?? "TactJetton",
@@ -151,5 +152,7 @@ export async function buildJettonMinterFromEnv(
             return await GovernanceJettonMinter.fromInit(0n, deployerAddress, null, content)
         case "feature-rich":
             return await JettonMinterFeatureRich.fromInit(0n, deployerAddress, content, true)
+        case "shard":
+            return await JettonMinterSharded.fromInit(0n, deployerAddress, content, true)
     }
 }
