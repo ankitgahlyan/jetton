@@ -5,7 +5,7 @@ import {beginCell, toNano, TonClient, WalletContractV4, internal, fromNano} from
 import {getHttpEndpoint} from "@orbs-network/ton-access"
 import {mnemonicToPrivateKey} from "@ton/crypto"
 import {buildJettonMinterFromEnv} from "../utils/jetton-helpers"
-//import {storeMint} from "../output/Jetton_JettonMinter"
+// import {storeMint} from "../output/Jetton_JettonMinter"
 import {storeMint} from "../output/Shard_JettonMinterSharded"
 
 import {printSeparator} from "../utils/print"
@@ -56,7 +56,7 @@ const main = async () => {
 
     const deployerWalletContract = client.open(deployerWallet)
 
-    //const jettonMinter = await buildJettonMinterFromEnv(deployerWalletContract.address, "base")
+    // const jettonMinter = await buildJettonMinterFromEnv(deployerWalletContract.address, "base")
     const jettonMinter = await buildJettonMinterFromEnv(deployerWalletContract.address, "shard")
     const deployAmount = toNano("0.15")
 

@@ -104,7 +104,7 @@ export const displayContentCell = async (content: Cell) => {
         console.log(`Token name: ${result.name}`)
         console.log(`Description: ${result.description}`)
         console.log(`Image: ${chalk.underline(result.image)}`)
-    } catch (e) {
+    } catch (_e) {
         console.error("Failed to parse metadata from cell")
     }
 }
@@ -153,6 +153,6 @@ export async function buildJettonMinterFromEnv(
         case "feature-rich":
             return await JettonMinterFeatureRich.fromInit(0n, deployerAddress, content, true)
         case "shard":
-            return await JettonMinterSharded.fromInit(0n, deployerAddress, content, true)
+            return await JettonMinterSharded.fromInit(deployerAddress, content)
     }
 }

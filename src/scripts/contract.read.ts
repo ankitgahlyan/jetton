@@ -6,8 +6,8 @@ import {getHttpEndpoint} from "@orbs-network/ton-access"
 import {Address} from "@ton/core"
 import {createInterface} from "readline/promises"
 import {TonClient} from "@ton/ton"
-//import {JettonMinter} from "../output/Jetton_JettonMinter"//base
-import {JettonMinterSharded} from "../output/Shard_JettonMinterSharded" //shard
+// import {JettonMinter} from "../output/Jetton_JettonMinter"//base
+import {JettonMinterSharded} from "../output/Shard_JettonMinterSharded" // shard
 import {displayContentCell} from "../utils/jetton-helpers"
 import chalk from "chalk"
 import {getNetworkFromEnv} from "../utils/utils"
@@ -24,7 +24,7 @@ const readContractAddress = async () => {
             const address = Address.parse(minterAddress)
             readline.close()
             return address
-        } catch (e) {
+        } catch (_e) {
             console.error("Invalid address, please try again.")
         }
     }

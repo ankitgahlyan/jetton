@@ -112,11 +112,11 @@ trait Upgradable with Ownable {
 asm fun setCode(code: Cell) { SETCODE }
 
 fun emitEvent(eventType: Int, from: Address, to: Address, amount: Int) {
-    emit(NetworkEvent{
-        eventType: eventType,
-        from: from,
-        to: to,
-        amount: amount
+    emit(NetworkEvent {
+        eventType,
+        from,
+        to,
+        amount,
     }.toCell());
 }
 
@@ -127,8 +127,6 @@ fun emitEvent(eventType: Int, from: Address, to: Address, amount: Int) {
 message Vote {
     value: Bool;
 }
-
-
 
 //
 // Reference solution
