@@ -12,6 +12,8 @@ import "./send";
 
 struct JettonMinterState {
     totalSupply: Int as coins;
+    treasurySurplus: Int as coins;
+    treasuryDeficits: Int as coins;
     mintable: Bool;
     adminAddress: Address;
     jettonContent: Cell;
@@ -19,16 +21,17 @@ struct JettonMinterState {
 }
 
 contract JettonMinterSharded {
-
-    totalConnections: Int as uint32 = 0;//noneedOf notify on minter's wallet init, supply of connections
+    totalSupply: Int as coins = 0;
+    treasurySurplus: Int as coins = 0;
+    treasuryDeficits: Int as coins = 0;
     owner: Address;
     jettonContent: Cell;
     mintable: Bool = true;
     //mbrpAmount: Int as coins,//TODO: change from coins, add fun to change, send message to all contracts on change
-    
+
     init(owner: Address, jettonContent: Cell) {
         self.owner = owner;
-        self.jettonContent = jettonContent
+        self.jettonContent = jettonContent;
     }
 
     // receive("updateMBRP") {
@@ -40,7 +43,7 @@ contract JettonMinterSharded {
 
         let ownerShard = msg.ownerAddress.getShard();
 
-        let hash = getJettonWalletInit(msg.ownerAddress).hash();
+        let hash = self.getJettonWalletInit(msg.ownerAddress).hash();
 
         // If owner is basechain address, we can calculate jettonWallet
         let targetJettonWallet: BasechainAddress = (ownerWorkchain == Basechain)
@@ -57,17 +60,21 @@ contract JettonMinterSharded {
 
     receive(msg: JettonBurnNotification) {
         // let expectedAddress: Address = contractAddress(initOf TodoChild(myAddress(), msg.fromSeqno));
-        
+
         // require(sender() == expectedAddress, "Access denied");
         // only the real children can get here
 
         let sender = parseStdAddress(sender().asSlice());
-        let wallet = getJettonBasechainWalletByOwner(msg.sender);
+        let wallet = self.getJettonBasechainWalletByOwner(msg.sender);
 
         // Workchain 0 is basechain
         require(sender.workchain == Basechain && sender.address == wallet.hash!!, "Unauthorized burn");
 
-        self.totalSupply -= msg.amount;
+        if (msg.sender == self.owner) {
+            self.totalSupply += msg.amount;
+        } else {
+            self.totalSupply -= msg.amount;
+        }
 
         if (msg.responseDestination != null) {
             MessageParameters {
@@ -104,8 +111,6 @@ contract JettonMinterSharded {
 
         self.totalSupply += msg.mintMessage.amount;
 
-        let receiverShard = msg.receiver.getShard();
-
         // basechain destination is calculated inside deploy function
         DeployParameters {
             value: 0, // ignore msg.tonAmount and use SendMode 64 instead
@@ -113,7 +118,7 @@ contract JettonMinterSharded {
             mode: SendRemainingValue | SendBounceIfActionFail,
             body: msg.mintMessage.toCell(),
             init: initOf JettonWalletSharded(msg.receiver, myAddress(), self.owner),
-        }.toShard(receiverShard).send();
+        }.toShard(msg.receiver.getShard()).send();
     }
 
     receive(msg: ClaimTON) {
@@ -152,6 +157,8 @@ contract JettonMinterSharded {
     get fun get_jetton_data(): JettonMinterState {
         return JettonMinterState {
             totalSupply: self.totalSupply,
+            treasurySurplus: self.treasurySurplus,
+            treasuryDeficits: self.treasuryDeficits,
             mintable: self.mintable,
             adminAddress: self.owner,
             jettonContent: self.jettonContent,
@@ -160,17 +167,17 @@ contract JettonMinterSharded {
     }
 
     get fun get_wallet_address(ownerAddress: Address): Address {
-        return getJettonWalletByOwner(ownerAddress);
+        return self.getJettonWalletByOwner(ownerAddress);
     }
 
     inline fun getJettonWalletInit(address: Address): Cell {
-        let init = initOf JettonWalletSharded(address, myAddress(), self.adminAddress);
+        let init = initOf JettonWalletSharded(address, myAddress(), self.owner);
 
         return beginCell().storeShardedStateInit(init).endCell();
     }
 
     inline fun getJettonWalletByOwner(jettonWalletOwner: Address): Address {
-        let init = getJettonWalletInit(jettonWalletOwner);
+        let init = self.getJettonWalletInit(jettonWalletOwner);
 
         let ownerShard = jettonWalletOwner.getShard();
 
@@ -184,14 +191,10 @@ contract JettonMinterSharded {
     }
 
     inline fun getJettonBasechainWalletByOwner(jettonWalletOwner: Address): BasechainAddress {
-        let init = getJettonWalletInit(jettonWalletOwner);
+        let init = self.getJettonWalletInit(jettonWalletOwner);
 
         let ownerShard = jettonWalletOwner.getShard();
 
         return BasechainAddress { hash: changeShard(init.hash(), ownerShard) };
     }
-
 }
-
-
-

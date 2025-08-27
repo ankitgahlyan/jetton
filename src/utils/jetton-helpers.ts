@@ -153,6 +153,6 @@ export async function buildJettonMinterFromEnv(
         case "feature-rich":
             return await JettonMinterFeatureRich.fromInit(0n, deployerAddress, content, true)
         case "shard":
-            return await JettonMinterSharded.fromInit(0n, deployerAddress, content, true)
+            return await JettonMinterSharded.fromInit(deployerAddress, content)
     }
 }
