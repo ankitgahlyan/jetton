@@ -963,7 +963,6 @@ contract JettonWalletSharded {
 
     bounced(msg: bounced<JettonBurnNotification>) {
         //TODO: send again
-
         self.balance += msg.amount;
     }
 

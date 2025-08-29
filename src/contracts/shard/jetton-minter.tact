@@ -62,6 +62,11 @@ contract JettonMinterSharded {
         // require(sender() == expectedAddress, "Access denied");
         // only the real children can get here
 
+        // let expectedAddress: Address = contractAddress(initOf TodoChild(myAddress(), msg.fromSeqno));
+
+        // require(sender() == expectedAddress, "Access denied");
+        // only the real children can get here
+
         let sender = parseStdAddress(sender().asSlice());
         let wallet = self.getJettonBasechainWalletByOwner(msg.sender);
 
