@@ -333,6 +333,7 @@ message(27) ChangeOwner {
 }
 
 // provide_wallet_balance#7ac8d559 receiver:MsgAddress include_verify_info:Bool = InternalMsgBody
+
 message(28) ProvideWalletBalance {
     receiver: Address;
     includeVerifyInfo: Bool;
@@ -346,6 +347,7 @@ struct VerifyInfo {
 
 // verify_info$_ owner:MsgAddress minter:MsgAddress code:^Cell = VerifyInfo
 // take_wallet_balance#ca77fdc2 balance:Coins verify_info:(Maybe VerifyInfo) = InternalMsgBody
+
 message(29) TakeWalletBalance {
     balance: Int as coins;
     verifyInfo: VerifyInfo?;

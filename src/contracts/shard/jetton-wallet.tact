@@ -874,6 +874,7 @@ contract JettonWalletSharded {
         //TODO: if (self.balance < 0) {adjust debts}//consider using debts only instead of -veBalance
         self.balance -= amount;
         throwUnless(INSUFFICIENT_BALANCE, self.balance >= 0);
+        //todo
     }
 
     inline fun mintInternal(amount: Int) { //TODO: adjust this logic in receiver maybe
@@ -963,7 +964,6 @@ contract JettonWalletSharded {
 
     bounced(msg: bounced<JettonBurnNotification>) {
         //TODO: send again
-
         self.balance += msg.amount;
     }
 
